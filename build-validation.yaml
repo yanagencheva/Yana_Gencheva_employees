@@ -1,0 +1,21 @@
+trigger: none
+
+pool: 
+  name: 'prod'
+
+variables:
+  majorVer: 1
+  minorVer: 0
+  buildConfiguration: 'Release'
+  group: template-common
+
+name: $(majorVer).$(minorVer)$(Rev:.r)
+
+stages:
+  - stage: Build_Validation_Webapi
+    displayName: Build Validation WebApi
+    jobs:
+    - template: pipelines/unit-tests-template.yml
+      parameters:
+        projectName: EmployeesAPI.WebApi
+        testsProjectName: '$(Build.SourcesDirectory)/test/**/*.csproj'

@@ -1,0 +1,225 @@
+trigger:
+  branches:
+    include:
+      - dev/*
+      - master
+      - release/*
+  paths:
+    include:
+      - src
+
+pool: 
+  name: 'prod'
+
+variables:
+  majorVer: 1
+  minorVer: 0
+  buildConfiguration: 'Release'
+  group: template-common
+
+name: $(majorVer).$(minorVer)$(Rev:.r)
+
+stages:
+  - stage: Unit_Tests
+    displayName: Unit Tests
+    jobs:
+    - template: pipelines/unit-tests-template.yml
+      parameters:
+        projectName: EmployeesAPI.WebApi
+        testsProjectName: '$(Build.SourcesDirectory)/test/**/*.csproj'
+
+  - stage: Create_Push_Tag
+    displayName: Create and push tag in master 
+    condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/master'))
+    dependsOn: Unit_Tests
+    variables:
+      - group: template-common  
+    jobs:
+      - job: GitTag
+        steps:
+          - checkout: self
+            persistCredentials: true
+          - powershell: |
+              $url = "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_apis/git/repositories/$(Build.Repository.ID)/pullrequests?searchCriteria.targetRefName=refs/heads/master&searchCriteria.status=completed&'$top=1&api-version=5.1"
+              $result = Invoke-RestMethod -Uri $url -Headers @{authorization = "Bearer $(System.AccessToken)"} -Method get
+              $branches = $result.value[0]
+              echo "##vso[task.setvariable variable=sourceBranch]$($branches.sourceRefName)"
+          - bash: |
+              #!/bin/sh
+              taskBranch=$(echo $branch | awk -F / '{ print $4 }')
+              echo "Source branch name is:" $taskBranch
+              git config --global user.email "borislav.gergovski@tbs.tech"
+              git config --global user.name "Azure Build Agent" 
+              git tag -a $taskBranch -m "Task is $taskBranch"
+              git push --tags origin HEAD:master            
+            env:
+              branch: $(sourceBranch)               
+          
+  - stage: Build
+    displayName: Build    
+    condition: and(succeeded(), or(startsWith(variables['build.sourceBranch'], 'refs/heads/dev/'), eq(variables['build.sourceBranch'], 'refs/heads/master')))
+    dependsOn: Unit_Tests
+    variables:
+      - group: template-common
+    jobs:
+      - job: DockerTasks
+        steps:
+          - template: pipelines/docker-build-template.yml
+            parameters:
+              repository: $(TemplateSvcName)
+              dockerfile: $(Build.SourcesDirectory)/src/EmployeesAPI.WebApi/Dockerfile
+              servicename: $(TemplateSvcName)
+              registry: localhost   
+              build: true
+
+  - stage: Build_Release_Hotfix
+    displayName: Build for hotfix in Release  
+    condition: and(succeeded(), startsWith(variables['build.sourceBranch'], 'refs/heads/release/'))
+    dependsOn: Unit_Tests
+    variables:
+      - group: template-common  
+    jobs:
+      - job: DockerTasks
+        steps:
+          - bash: |
+              echo "##vso[task.setvariable variable=buildRun;]true" 
+            condition: startsWith(variables['build.SourceVersionMessage'], 'fix')
+          - template: pipelines/docker-build-template.yml
+            parameters:
+              repository: $(TemplateSvcName)
+              dockerfile: $(Build.SourcesDirectory)/src/EmployeesAPI.WebApi/Dockerfile
+              servicename: $(TemplateSvcName)
+              registry: localhost         
+              build: $(buildRun)  
+
+  - stage: Deploy_DEV     
+    condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/master'))   
+    displayName: Deploy to DEV
+    dependsOn: Build
+    variables:
+      - group: template-common  
+      - group: template-dev
+    jobs:
+      - template: pipelines/kubernetes-deploy-jobs-template.yml
+        parameters:
+          kubernetesServiceConnection: template-kubernetes
+          environment: dev
+          servicename: $(TemplateSvcName)
+          namespace: dev          
+      - job: SendNotification_Deploy_Succeeded
+        displayName: Send notification - Deployment succeeded 
+        dependsOn: Deployment_Job
+        condition: succeeded()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: dev
+              status: succeeded
+      - job: SendNotification_Deploy_Failed
+        displayName: Send notification - Deployment failed 
+        dependsOn: Deployment_Job
+        condition: failed()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: dev
+              status: failed    
+
+  - stage: Deploy_TEST
+    condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/master'))    
+    displayName: Deploy to TEST
+    dependsOn: Build
+    variables:
+      - group: template-common  
+      - group: template-test
+    jobs:
+      - template: pipelines/kubernetes-deploy-jobs-template.yml
+        parameters:
+          kubernetesServiceConnection: template-kubernetes
+          environment: test
+          servicename: $(TemplateSvcName)
+          namespace: test     
+      - job: SendNotification_Deploy_Succeeded
+        displayName: Send notification - Deployment succeeded 
+        dependsOn: Deployment_Job
+        condition: succeeded()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: test
+              status: succeeded
+      - job: SendNotification_Deploy_Failed
+        displayName: Send notification - Deployment failed 
+        dependsOn: Deployment_Job
+        condition: failed()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: test
+              status: failed  
+
+  - stage: Deploy_STAGING   
+    condition: and(in(dependencies.Build_Release_Hotfix.result, 'Succeeded', 'SucceededWithIssues'), startsWith(variables['build.sourceBranch'], 'refs/heads/release/'))    
+    displayName: Deploy to STAGING
+    dependsOn: Build_Release_Hotfix
+    variables:
+      - group: template-common
+      - group: template-staging
+    jobs:
+      - template: pipelines/kubernetes-deploy-jobs-template.yml
+        parameters:
+          kubernetesServiceConnection: prod
+          environment: staging
+          servicename: $(TemplateSvcName)
+          namespace: staging           
+      - job: SendNotification_Deploy_Succeeded
+        displayName: Send notification - Deployment succeeded 
+        dependsOn: Deployment_Job
+        condition: succeeded()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: staging
+              status: succeeded
+      - job: SendNotification_Deploy_Failed
+        displayName: Send notification - Deployment failed 
+        dependsOn: Deployment_Job
+        condition: failed()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: staging
+              status: failed  
+        
+  - stage: Deploy_PROD   
+    condition: and(in(dependencies.Build_Release_Hotfix.result, 'Succeeded', 'SucceededWithIssues'), startsWith(variables['build.sourceBranch'], 'refs/heads/release/'))   
+    displayName: Deploy to PROD
+    dependsOn: Build_Release_Hotfix
+    variables:
+      - group: template-common
+      - group: template-prod
+    jobs:
+      - template: pipelines/kubernetes-deploy-jobs-template.yml
+        parameters:
+          kubernetesServiceConnection: prod
+          environment: prod
+          servicename: $(TemplateSvcName)
+          namespace: prod 
+      - job: SendNotification_Deploy_Succeeded
+        displayName: Send notification - Deployment succeeded 
+        dependsOn: Deployment_Job
+        condition: succeeded()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: prod
+              status: succeeded
+      - job: SendNotification_Deploy_Failed
+        displayName: Send notification - Deployment failed 
+        dependsOn: Deployment_Job
+        condition: failed()
+        steps:
+          - template: pipelines/notifications-template.yml
+            parameters:
+              environment: prod
+              status: failed  

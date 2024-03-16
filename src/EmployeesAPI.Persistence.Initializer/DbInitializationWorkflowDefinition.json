@@ -1,0 +1,17 @@
+{
+  "Id": "DbInitializationWorkflow",
+  "Version": 1,
+  "Steps": [
+    {
+      "Id": "RunDbMigration",
+      "Name": "RunDbMigration",
+      "StepType": "EmployeesAPI.Persistence.Initializer.Steps.RunDbMigration, EmployeesAPI.Persistence.Initializer",
+      "NextStepId": "SeedInitializationData"
+    },
+    {
+      "Id": "SeedInitializationData",
+      "Name": "SeedInitializationData",
+      "StepType": "EmployeesAPI.Persistence.Initializer.Steps.SeedInitializationData, EmployeesAPI.Persistence.Initializer"
+    }   
+  ]
+}
