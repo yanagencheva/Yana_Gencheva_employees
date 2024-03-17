@@ -44,9 +44,9 @@ internal class EmployeeProjectsService : IEmployeeProjectsService
 
     public EmployeeProjects CreateEmployeeProject(EmployeeProjects employeeProject)
     {
-        var employeeItems = unitOfWork.EmployeeProjects.Add(employeeProject);
+        var employeeWithProject = unitOfWork.EmployeeProjects.Add(employeeProject);
         unitOfWork.Commit();
-        return employeeItems;
+        return employeeWithProject;
     
     }
 

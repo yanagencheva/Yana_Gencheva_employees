@@ -44,18 +44,20 @@ public class EmployeeProjectsController : ControllerBase
     }
 
     [HttpPost("import-file")]
-    public async Task<ActionResult>  ImportData([FromForm] ImportFile file)
+    public ActionResult<ImportResult> ImportData([FromForm] ImportFile file)
     {
         if(file.File == null)
         {
             throw new ArgumentNullException(nameof(file));
         }
 
+        var success = 0;
+        var failed = 0;
         using (var memoryStream = new MemoryStream())
         {
             file.File.CopyTo(memoryStream);
             memoryStream.Position = 0;
-
+           
             using (var reader = new StreamReader(memoryStream, System.Text.Encoding.UTF8, true))
             {               
                 while (!reader.EndOfStream)
@@ -65,23 +67,37 @@ public class EmployeeProjectsController : ControllerBase
 
                     if(!line.Contains(headers))
                     {
-                        var newRecord = new CreateEmployeeProject();
-                        newRecord.EmpID = int.Parse(values[0]);
-                        newRecord.ProjectID = int.Parse(values[1]);
-                        var dateFormatFrom = CheckDateFormat(values[2]);
-                        newRecord.DateFrom = DateTime.ParseExact(values[2], dateFormatFrom, CultureInfo.InvariantCulture).ToUniversalTime();
-                        var dateFormatTo = CheckDateFormat(values[3]);
-                        newRecord.DateTo = string.IsNullOrWhiteSpace(values[3]) ? DateTime.Now.ToUniversalTime() : DateTime.ParseExact(values[3], dateFormatTo, CultureInfo.InvariantCulture).ToUniversalTime();
+                        try
+                        {
+                            var newRecord = new CreateEmployeeProject();
+                            newRecord.EmpID = int.Parse(values[0]);
+                            newRecord.ProjectID = int.Parse(values[1]);
+                            var dateFormatFrom = CheckDateFormat(values[2]);
+                            newRecord.DateFrom = DateTime.ParseExact(values[2], dateFormatFrom, CultureInfo.InvariantCulture).ToUniversalTime();
+                            var dateFormatTo = CheckDateFormat(values[3]);
+                            newRecord.DateTo = string.IsNullOrWhiteSpace(values[3]) ? DateTime.Now.ToUniversalTime() : DateTime.ParseExact(values[3], dateFormatTo, CultureInfo.InvariantCulture).ToUniversalTime();
 
-                        var entityItem = this.mapper.Map<EmployeeProjects>(newRecord);
-
-                        employeeProjectService.CreateEmployeeProject(entityItem);
+                            var entityItem = this.mapper.Map<EmployeeProjects>(newRecord);
+                            employeeProjectService.CreateEmployeeProject(entityItem);
+                            success++;
+                        }
+                        catch (Exception)
+                        {
+                            failed++;
+                            continue;
+                        }                   
                     }
                 }
             }
         }
 
-        return Ok();
+        var result = new ImportResult
+        {
+            InsertedRows = success,
+            FailedRows = failed
+        };
+
+        return Ok(result);
     }
     private string CheckDateFormat(string value)
     {
